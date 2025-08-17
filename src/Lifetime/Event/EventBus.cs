@@ -1,41 +1,52 @@
 using System;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace Cerm.Lifetime.Event
 {
-    public class EventBus : IEventBus
+    public sealed class EventBus : IEventBus
     {
-        private readonly ConcurrentDictionary<Type, ConcurrentBag<Delegate>> handlers;
+        public static IEventBus Instance { get; } = new EventBus();
+        
+        private readonly ConcurrentDictionary<Type, HandlerList> _handlers = new();
+        private readonly object _cleanupLock = new();
+        
+        private EventBus() { }
 
-        public EventBus()
+        public IDisposable Subscribe<T>(Action<T> handler) where T : EventDataBase
         {
-            handlers = new ConcurrentDictionary<Type, ConcurrentBag<Delegate>>();
+            var handlerWrapper = new HandlerWrapper<T>(handler);
+            var handlerList = _handlers.GetOrAdd(typeof(T), _ => new HandlerList());
+            
+            handlerList.Add(handlerWrapper);
+            
+            return new SubscriptionToken(() => handlerList.Remove(handlerWrapper));
         }
 
-        public void Subscribe<T>(Action<T> eventHandler) where T : EventDataBase
-        {
-            handlers.AddOrUpdate(
-                typeof(T),
-                new ConcurrentBag<Delegate> { eventHandler },
-                (k, e) =>
-                {
-                    e.Add(eventHandler);
-                    return e;
-                });
-        }
-
-        public void Unsubscribe<T>() where T : EventDataBase
-        {
-            handlers.Remove(typeof(T), out _);
-        }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Publish<T>(T eventData) where T : EventDataBase
         {
-            if (handlers.TryGetValue(typeof(T), out ConcurrentBag<Delegate>? eventHandlers))
+            if (!_handlers.TryGetValue(typeof(T), out var handlerList)) 
+                return;
+
+            var handlers = handlerList.GetSnapshot();
+            
+            foreach (var wrapper in handlers)
             {
-                foreach (Action<T> handler in eventHandlers.Cast<Action<T>>())
+                try
                 {
-                    handler(eventData);
+                    ((HandlerWrapper<T>)wrapper).Invoke(eventData);
+                }
+                catch
+                {
+                }
+            }
+            
+            if (handlers.Length > 0 && handlerList.NeedsCleanup)
+            {
+                lock (_cleanupLock)
+                {
+                    handlerList.Cleanup();
                 }
             }
         }

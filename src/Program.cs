@@ -1,6 +1,8 @@
 ﻿using System.Collections.ObjectModel;
+using Cerm.Input;
 using Cerm.Lifetime;
 using Cerm.Lifetime.Event;
+using Cerm.Render;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -24,7 +26,8 @@ namespace Cerm
                 .ConfigureServices((ctx, services) =>
                 {
                     services.AddHostedService<CermApplication>();
-                    services.AddSingleton<IEventBus, EventBus>();
+                    services.AddHostedService<InputHandler>();
+                    services.AddHostedService<TerminalRenderer>();
                 })
                 .Build()
                 .Run();
