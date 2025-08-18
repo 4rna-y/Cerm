@@ -6,17 +6,24 @@ namespace Cerm.Lifetime.Event
 {
     public sealed class EventBus : IEventBus
     {
-        public static IEventBus Instance { get; } = new EventBus();
+        public static IEventBus Instance { get; private set; }
         
-        private readonly ConcurrentDictionary<Type, HandlerList> _handlers = new();
-        private readonly object _cleanupLock = new();
-        
-        private EventBus() { }
+        private readonly ConcurrentDictionary<Type, HandlerList> handlers;
+
+        static EventBus()
+        {
+            Instance = new EventBus();
+        }
+
+        private EventBus()
+        {
+            handlers = new ConcurrentDictionary<Type, HandlerList>();
+        }
 
         public IDisposable Subscribe<T>(Action<T> handler) where T : EventDataBase
         {
             var handlerWrapper = new HandlerWrapper<T>(handler);
-            var handlerList = _handlers.GetOrAdd(typeof(T), _ => new HandlerList());
+            var handlerList = handlers.GetOrAdd(typeof(T), _ => new HandlerList());
             
             handlerList.Add(handlerWrapper);
             
@@ -26,28 +33,14 @@ namespace Cerm.Lifetime.Event
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Publish<T>(T eventData) where T : EventDataBase
         {
-            if (!_handlers.TryGetValue(typeof(T), out var handlerList)) 
+            if (!handlers.TryGetValue(typeof(T), out var handlerList)) 
                 return;
 
-            var handlers = handlerList.GetSnapshot();
+            var hs = handlerList.GetSnapshot();
             
-            foreach (var wrapper in handlers)
+            foreach (var wrapper in hs)
             {
-                try
-                {
-                    ((HandlerWrapper<T>)wrapper).Invoke(eventData);
-                }
-                catch
-                {
-                }
-            }
-            
-            if (handlers.Length > 0 && handlerList.NeedsCleanup)
-            {
-                lock (_cleanupLock)
-                {
-                    handlerList.Cleanup();
-                }
+                ((HandlerWrapper<T>)wrapper).Invoke(eventData);
             }
         }
     }
