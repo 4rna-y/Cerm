@@ -6,12 +6,14 @@ namespace Cerm.Render.Screen
 {
     public abstract class ScreenBase
     {
+        public bool IsCursor { get; }
         public ScreenLayer Component { get; }
         public ScreenLayer Modal { get; }
         public ScreenLayer Notification { get; }
 
-        public ScreenBase()
+        public ScreenBase(bool isCursor = true)
         {
+            IsCursor = isCursor;
             Component = new ScreenLayer();
             Modal = new ScreenLayer();
             Notification = new ScreenLayer();
