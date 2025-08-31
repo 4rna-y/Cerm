@@ -26,6 +26,7 @@ namespace Cerm
                 .ConfigureServices((ctx, services) =>
                 {
                     services.AddHostedService<CermApplication>();
+                    services.AddHostedService<ResizingWatcher>();
                     services.AddHostedService<InputHandler>();
                     services.AddHostedService<TerminalRenderer>();
                 })
