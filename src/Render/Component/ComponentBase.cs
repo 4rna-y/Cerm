@@ -1,73 +1,75 @@
 using System;
 using System.Buffers;
 using Cerm.Render.Interfaces;
+using Cerm.Render.Component.Layout;
 
 namespace Cerm.Render.Component
 {
     public abstract class ComponentBase : IDisposable
     {
         private static readonly ArrayPool<char> pool = ArrayPool<char>.Shared;
-
-        private Color foreground;
-        private Color background;
-        private IContainer? parent = null;
-
         protected char[] buffer;
-        protected int actualX;
-        protected int actualY;
-        protected int actualWidth;
-        protected int actualHeight;
-        
         public char[] GetBuffer() => buffer;
-        public int ActualX => actualX;
-        public int ActualY => actualY;
-        public int ActualWidth => actualWidth;
-        public int ActualHeight => actualHeight;
 
         public Guid Id { get; }
         public LayoutData Layout { get; }
+        public int ActualX { get; protected set; }
+        public int ActualY { get; protected set; }
+        public int ActualWidth { get; protected set; }
+        public int ActualHeight { get; protected set; }
         public Color Foreground
         {
-            get => foreground;
+            get => field;
             set
             {
                 RequiredRedraw = true;
-                foreground = value;
+                field = value;
             }
         }
         public Color Background
         {
-            get => background;
+            get => field;
             set
             {
                 RequiredRedraw = true;
-                background = value;
+                field = value;
             }
         }
         public IContainer? Parent
         {
-            get => parent;
+            get => field;
             set
             {
-                parent = value;
-                CalculateActualLayout();
+                field = value;
+                InvalidateLayout();
             }
         }
         public bool RequiredRedraw { get; set; } = true;
+        public bool IsLayoutValid { get; set; }
+
+        public bool IsVisible
+        {
+            get => field;
+            set
+            {
+                field = value;
+                InvalidateLayout();
+            }
+        } = true;
 
         public ComponentBase(LayoutValue x, LayoutValue y, PositionAnchor anchor, LayoutValue width, LayoutValue height, Color foreground, Color background)
         {
             Id = Guid.NewGuid();
             Layout = new LayoutData(x, y, anchor, width, height, OnPositionAnchorChanged, OnPositionChanged, OnSizeChanged);
-            this.foreground = foreground;
-            this.background = background;
+            this.Foreground = foreground;
+            this.Background = background;
 
-            buffer = pool.Rent(Math.Max(1, actualWidth * actualHeight));
+            buffer = pool.Rent(Math.Max(1, ActualWidth * ActualHeight));
         }
 
         public abstract void Render();
 
-        private void CalculateActualLayout()
+        private protected void CalculateActualLayout()
         {
             PositionAnchor anchor = Layout.Anchor;
             LayoutValue x = Layout.X;
@@ -85,7 +87,7 @@ namespace Cerm.Render.Component
 
             GetAnchorRatio(anchor, ref xAnchor, ref yAnchor);
 
-            if (parent != null)
+            if (Parent != null)
             {
                 parentActualX = Parent!.ActualX;
                 parentActualY = Parent!.ActualY;
@@ -93,15 +95,25 @@ namespace Cerm.Render.Component
                 parentActualHeight = Parent!.ActualHeight;
             }
 
-            if (w.Mode == LayoutMode.Proportional) actualWidth = (int)(parentActualWidth * w.Value);
-            if (h.Mode == LayoutMode.Proportional) actualHeight = (int)(parentActualHeight * h.Value);
-            if (w.Mode == LayoutMode.Fixed) actualWidth = (int)w.Value;
-            if (h.Mode == LayoutMode.Fixed) actualHeight = (int)h.Value;
+            int oldWidth = ActualWidth;
+            int oldHeight = ActualHeight;
 
-            if (x.Mode == LayoutMode.Proportional) actualX = (int)(parentActualX + (x.Value * parentActualWidth) + (xAnchor * actualWidth));
-            if (y.Mode == LayoutMode.Proportional) actualY = (int)(parentActualY + (y.Value * parentActualHeight) + (yAnchor * actualHeight));
-            if (x.Mode == LayoutMode.Fixed) actualX = (int)(parentActualX + x.Value + (xAnchor * actualWidth));
-            if (y.Mode == LayoutMode.Fixed) actualY = (int)(parentActualY + y.Value + (yAnchor * actualHeight)); 
+            if (w.Mode == LayoutMode.Proportional) ActualWidth = (int)(parentActualWidth * w.Value);
+            if (h.Mode == LayoutMode.Proportional) ActualHeight = (int)(parentActualHeight * h.Value);
+            if (w.Mode == LayoutMode.Fixed) ActualWidth = (int)w.Value;
+            if (h.Mode == LayoutMode.Fixed) ActualHeight = (int)h.Value;
+
+            if (x.Mode == LayoutMode.Proportional) ActualX = (int)(parentActualX + (x.Value * parentActualWidth) - (xAnchor * ActualWidth));
+            if (y.Mode == LayoutMode.Proportional) ActualY = (int)(parentActualY + (y.Value * parentActualHeight) - (yAnchor * ActualHeight));
+            if (x.Mode == LayoutMode.Fixed) ActualX = (int)(parentActualX + x.Value - (xAnchor * ActualWidth));
+            if (y.Mode == LayoutMode.Fixed) ActualY = (int)(parentActualY + y.Value - (yAnchor * ActualHeight));
+
+
+            if (oldWidth != ActualWidth || oldHeight != ActualHeight)
+            {
+                pool.Return(buffer, true);
+                buffer = pool.Rent(Math.Max(1, ActualWidth * ActualHeight));
+            }
         }
 
         private void GetAnchorRatio(PositionAnchor anchor, ref double xAnchor, ref double yAnchor)
@@ -151,23 +163,58 @@ namespace Cerm.Render.Component
             }
         }
 
+        public virtual void InvalidateLayout()
+        {
+            if (IsLayoutValid)
+            {
+                IsLayoutValid = false;
+                RequiredRedraw = true;
+                Parent?.InvalidateLayout();
+            }
+        }
+
+        public virtual void EnsureLayout()
+        {
+            if (!IsLayoutValid)
+            {
+                if (IsVisible)
+                {
+                    CalculateActualLayout();
+                }
+                else
+                {
+                    ActualX = 0;
+                    ActualY = 0;
+                    ActualWidth = 0;
+                    ActualHeight = 0;
+                    pool.Return(buffer, true);
+                    buffer = pool.Rent(1);
+                }
+                IsLayoutValid = true;
+                
+                if (this is IContainer container)
+                {
+                    foreach (var child in container.Children)
+                    {
+                        child.EnsureLayout();
+                    }
+                }
+            }
+        }
+
         private void OnPositionChanged()
         {
-            RequiredRedraw = true;
+            InvalidateLayout();
         }
 
         private void OnPositionAnchorChanged()
         {
-            RequiredRedraw = true;
-            CalculateActualLayout();
+            InvalidateLayout();
         }
 
         private void OnSizeChanged()
         {
-            pool.Return(buffer, true);
-            CalculateActualLayout();
-            buffer = pool.Rent(actualHeight * actualWidth);
-            RequiredRedraw = true;
+            InvalidateLayout();
         }
 
         public void Dispose()

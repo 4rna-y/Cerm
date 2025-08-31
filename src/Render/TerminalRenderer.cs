@@ -1,11 +1,14 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using Cerm.Input;
 using Cerm.Lifetime.Event;
 using Cerm.Render.Component;
+using Cerm.Render.Events;
 using Cerm.Render.Interfaces;
 using Cerm.Render.Screen;
 using Cerm.ScreenTest;
+using Cerm.Welcome;
 using Microsoft.Extensions.Hosting;
 
 namespace Cerm.Render
@@ -16,7 +19,7 @@ namespace Cerm.Render
         private BufferedStream bufferedOutput;
         private StreamWriter bufferWriter;
         private bool requiredRecollect;
-        private List<ComponentBase> components;
+        private bool requiredResizing;
         private int cursorX = -1;
         private int cursorY = -1;
         private int screenWidth;
@@ -32,45 +35,57 @@ namespace Cerm.Render
             bufferedOutput = new BufferedStream(Console.OpenStandardOutput(), 8192);
             bufferWriter = new StreamWriter(bufferedOutput) { AutoFlush = false };
             Console.SetOut(bufferWriter);
-            components = new List<ComponentBase>();
             screenWidth = Console.WindowWidth;
             screenHeight = Console.WindowHeight;
-            CurrentScreen = new ColorTestScreen();
-            
+            CurrentScreen = new WelcomeScreen();
+
             EventBus.Instance.Subscribe<KeyPressedEvent>(OnKeyPressed);
             EventBus.Instance.Subscribe<StructureChangedEvent>(OnStructureChanged);
+            EventBus.Instance.Subscribe<WindowResizedEvent>(OnWindowSizeChanged);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            screenWidth = Console.WindowWidth;
+            screenHeight = Console.WindowHeight;
+            CurrentScreen.Component.SetSize(screenWidth, screenHeight);
             this.Clear();
             SetCursor(CurrentScreen.IsCursor);
             CurrentScreen.OnInitialized();
 
-            double ideal = 16.0;
-            double alpha = 0.1;
-            double fps = 60.0;
+            CurrentScreen.Component.CollectComponentsAsFlat();
+            CurrentScreen.Component.FocusToFirst();
+
+            const double targetFps = 60.0;
+            const long targetFrameTime = (long)(1000.0 / targetFps);
+            double actualFps = targetFps;
             long renderTime = 0;
             long lastFrameStart = 0;
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 long frameStart = Environment.TickCount64;
-                
+
                 if (lastFrameStart > 0)
                 {
                     long actualFrameTime = frameStart - lastFrameStart;
-                    ideal = alpha * actualFrameTime + (1 - alpha) * ideal;
-                    fps = 1000.0 / ideal;
+                    actualFps = 1000.0 / actualFrameTime;
                 }
 
                 long renderStart = Environment.TickCount64;
                 RenderComponent();
                 renderTime = Environment.TickCount64 - renderStart;
 
-                EventBus.Instance.Publish(new RenderInfoNotificationEvent(fps, renderTime));
-                await Task.Delay(16, stoppingToken);
+                EventBus.Instance.Publish(new RenderInfoNotificationEvent(actualFps, renderTime));
+
+                long elapsed = Environment.TickCount64 - frameStart;
+                long remainingTime = targetFrameTime - elapsed;
                 
+                if (remainingTime > 0)
+                {
+                    await Task.Delay((int)remainingTime, stoppingToken);
+                }
+
                 lastFrameStart = frameStart;
             }
         }
@@ -93,29 +108,25 @@ namespace Cerm.Render
             Console.Out.Flush();
         }
 
-        private void CollectComponentsFromContainer(IContainer container)
-        {
-            for (int i = 0; i < container.Children.Count; i++)
-            {
-                if (container.Children[i] is IContainer childContainer)
-                {
-                    CollectComponentsFromContainer(childContainer);
-                }
-
-                components.Add(container.Children[i]);
-            }
-        }
-
         private void RenderComponent()
         {
             renderBuffer.Clear();
+            
+            CurrentScreen.Component.EnsureLayout();
 
-            if (requiredRecollect)
+            if (requiredRecollect || requiredResizing)
             {
-                components.Clear();
-                CollectComponentsFromContainer(CurrentScreen.Component);
+                if (requiredResizing)
+                {
+                    Console.Clear();
+                    Console.Out.Flush();
+                }
+                requiredResizing = false;
+                requiredRecollect = false;
+
+                CurrentScreen.Component.CollectComponentsAsFlat();
                 RenderFullScreen();
-                
+
                 if (renderBuffer.Length > 0)
                 {
                     Console.Write(renderBuffer.ToString());
@@ -126,10 +137,6 @@ namespace Cerm.Render
             {
                 RenderDirtyComponents();
             }
-            
-            
-            
-            requiredRecollect = false;
         }
 
         private void RenderFullScreen()
@@ -137,7 +144,8 @@ namespace Cerm.Render
             renderBuffer.Write("\x1b[2J\x1b[H");
             cursorX = 0;
             cursorY = 0;
-            
+            List<ComponentBase> components = CurrentScreen.Component.GetComponentsAsFlat(); 
+
             for (int i = 0; i < components.Count; i++)
             {
                 components[i].Render();
@@ -148,6 +156,7 @@ namespace Cerm.Render
 
         private void RenderDirtyComponents()
         {
+            List<ComponentBase> components = CurrentScreen.Component.GetComponentsAsFlat(); 
             for (int i = 0; i < components.Count; i++)
             {
                 if (components[i].RequiredRedraw)
@@ -192,19 +201,19 @@ namespace Cerm.Render
                 MoveCursor(writer, tx, ty);
 
                 int bi = (clipTop + dy) * w + clipLeft;
-                
+
                 if (bi < 0 || bi >= buffer.Length) continue;
-                
+
                 int actualRenderWidth = Math.Min(renderWidth, buffer.Length - bi);
                 if (actualRenderWidth <= 0) continue;
-                
+
                 Span<char> s = buffer.AsSpan(bi, actualRenderWidth);
                 writer.Write(s);
-                
+
                 cursorX = tx + actualRenderWidth;
                 cursorY = ty;
             }
-            
+
             writer.Write("\x1b[0m");
         }
 
@@ -248,6 +257,19 @@ namespace Cerm.Render
         private void OnStructureChanged(StructureChangedEvent e)
         {
             requiredRecollect = true;
+
+            CurrentScreen.Component.EnsureLayout();
+        }
+
+        private void OnWindowSizeChanged(WindowResizedEvent e)
+        {
+            screenWidth = e.NewWidth;
+            screenHeight = e.NewHeight;
+            CurrentScreen.Component.SetSize(screenWidth, screenHeight);
+            CurrentScreen.OnSizeChanged(e);
+            requiredResizing = true;
+
+            CurrentScreen.Component.EnsureLayout();
         }
     }
 }

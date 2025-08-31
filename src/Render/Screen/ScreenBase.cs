@@ -1,5 +1,6 @@
 using Cerm.Input;
 using Cerm.Render.Component;
+using Cerm.Render.Events;
 using Cerm.Render.Interfaces;
 
 namespace Cerm.Render.Screen
@@ -21,5 +22,6 @@ namespace Cerm.Render.Screen
 
         public abstract void OnInitialized();
         public abstract void OnKeyPressed(KeyPressedEvent e);
+        public abstract void OnSizeChanged(WindowResizedEvent e);
     }
 }

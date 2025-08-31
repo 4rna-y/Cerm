@@ -12,5 +12,6 @@ namespace Cerm.Render.Interfaces
         public void Add(ComponentBase child);
         public void Remove(ComponentBase child);
         public List<ComponentBase> Children { get; }
+        public void InvalidateLayout();
     }
 }
