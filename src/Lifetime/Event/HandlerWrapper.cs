@@ -1,5 +1,3 @@
-using System;
-
 namespace Cerm.Lifetime.Event
 {
     internal abstract class HandlerWrapper
@@ -27,7 +25,7 @@ namespace Cerm.Lifetime.Event
 
         public override int GetHashCode() => _hashCode;
         
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (obj is HandlerWrapper<T> other)
             {
